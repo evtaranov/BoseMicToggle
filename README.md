@@ -86,7 +86,7 @@ grep 'accessibility trusted' ~/Library/Logs/BoseMicToggle.log | tail -1
 
 ```sh
 # Громкость подтверждения (доля от системной)
-defaults write io.github.bosemictoggle soundVolume -float 0.35
+defaults write io.github.bosemictoggle soundVolume -float 0.75
 
 # Звуки: имена файлов из /System/Library/Sounds.
 # Префикс reversed: проигрывает звук задом наперёд -- так получается пара

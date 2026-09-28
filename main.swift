@@ -267,7 +267,7 @@ final class Sounds {
             "soundUnmuted": reversedPrefix + "Bottle",
             "soundMuted": "Bottle",
             "soundFailed": "Basso",     // привычный системный звук ошибки
-            "soundVolume": 0.35,
+            "soundVolume": 0.75,
             "soundsEnabled": true,
         ])
     }
