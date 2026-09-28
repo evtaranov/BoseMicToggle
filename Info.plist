@@ -20,7 +20,7 @@
 	<string>1</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>13.0</string>
-	<!-- Агент без иконки в Dock и без окон. -->
+	<!-- An agent with no Dock icon and no windows. -->
 	<key>LSUIElement</key>
 	<true/>
 </dict>

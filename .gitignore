@@ -1,4 +1,4 @@
-# Промежуточный каталог iconutil -- .icns коммитим, его нет смысла
+# iconutil's intermediate directory -- the .icns is committed, this is not
 AppIcon.iconset/
 
 .DS_Store

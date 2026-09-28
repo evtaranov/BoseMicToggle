@@ -1,10 +1,10 @@
 #!/bin/bash
-# Ставит автозапуск при входе в систему.
+# Installs the login LaunchAgent.
 #
-# plist генерируется здесь, а не лежит в репозитории: launchd не понимает "~"
-# и требует абсолютный путь, а он у каждого свой.
+# The plist is generated here rather than committed: launchd does not
+# understand "~" and requires an absolute path, which differs per user.
 #
-# Снять автозапуск: ./install-autostart.sh --uninstall
+# Remove it again with: ./install-autostart.sh --uninstall
 set -euo pipefail
 
 LABEL="io.github.bosemictoggle"
@@ -14,19 +14,19 @@ APP="$HOME/Applications/BoseMicToggle.app"
 if [ "${1:-}" = "--uninstall" ]; then
 	launchctl unload "$PLIST" 2>/dev/null || true
 	rm -f "$PLIST"
-	echo "автозапуск снят"
+	echo "autostart removed"
 	exit 0
 fi
 
 if [ ! -d "$APP" ]; then
-	echo "нет $APP -- сначала соберите: ./build.sh" >&2
+	echo "$APP is missing -- build it first: ./build.sh" >&2
 	exit 1
 fi
 
 mkdir -p "$HOME/Library/LaunchAgents"
 
-# Запускаем через /usr/bin/open, а не бинарник напрямую: так приложение
-# получает bundle-идентичность, от которой зависит грант Accessibility.
+# Launch through /usr/bin/open rather than the binary directly: that is how the
+# app keeps the bundle identity its Accessibility grant is tied to.
 cat > "$PLIST" <<PLIST_END
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -49,4 +49,4 @@ PLIST_END
 launchctl unload "$PLIST" 2>/dev/null || true
 launchctl load "$PLIST"
 
-echo "автозапуск установлен: $PLIST"
+echo "autostart installed: $PLIST"

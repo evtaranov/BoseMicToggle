@@ -2,51 +2,51 @@
 
 # BoseMicToggle
 
-Кнопка play/pause на Bluetooth-наушниках мьютит и анмьютит микрофон в Zoom.
+The play/pause button on your Bluetooth headset mutes and unmutes your
+microphone in Zoom.
 
-Маленький агент в меню-баре для macOS. Без зависимостей: один файл на Swift,
-собирается системным `swiftc`.
+A small macOS menu bar agent. No dependencies: a single Swift file built with
+the system `swiftc`.
 
-- Иконка в меню-баре показывает состояние микрофона
-- Звуковое подтверждение переключения
-- Горячая клавиша `Ctrl+Alt+Cmd+M`
-- Слушает кнопку только во время митинга, в остальное время не работает и
-  ресурсов не ест
+- The menu bar icon reflects the microphone state
+- Audio feedback on every toggle
+- `Ctrl+Alt+Cmd+M` hotkey
+- Listens for the button only during a meeting, and is idle otherwise
 
-## Почему это вообще нетривиально
+## Why this is not straightforward
 
-Во время звонка гарнитура переключается из A2DP в профиль HFP (16 кГц моно).
-В HFP многофункциональная кнопка -- это управление вызовом, а не медиа-клавиша:
-наушники присылают AT-команду `AT+CHUP` («сбросить вызов») по RFCOMM.
+During a call the headset switches from A2DP to the HFP profile (16 kHz mono).
+In HFP the multifunction button is call control, not a media key: the headset
+sends the AT command `AT+CHUP` ("hang up") over RFCOMM.
 
-Эту команду принимает системный `bluetoothd` и приложениям не отдаёт. Проверено,
-что её нет:
+The system `bluetoothd` receives that command and never forwards it to
+applications. Verified absent from:
 
-| Слой | Результат |
+| Layer | Result |
 |---|---|
-| Поток CGEvent (`hs.eventtap`, Karabiner) | нажатие не приходит |
-| MediaRemote / `MPRemoteCommandCenter` | не приходит (приходит только синтезированная медиа-клавиша) |
-| HID (`IOHIDManager`) | для Bluetooth-гарнитуры устройство не создаётся; найденные Consumer-Control `Headset` принадлежат встроенному кодеку, то есть разъёму 3.5 мм |
-| RFCOMM (`IOBluetoothRFCOMMChannel`) | канал занят системой, вторым слушателем не подключиться |
+| CGEvent stream (`hs.eventtap`, Karabiner) | the press never arrives |
+| MediaRemote / `MPRemoteCommandCenter` | never arrives (only a synthesized media key does) |
+| HID (`IOHIDManager`) | no device is created for a Bluetooth headset; the Consumer-Control `Headset` devices that do exist belong to the built-in codec, i.e. the 3.5 mm jack |
+| RFCOMM (`IOBluetoothRFCOMMChannel`) | the channel is owned by the system; a second listener cannot attach |
 
-Единственный публичный способ увидеть нажатие -- unified log: `bluetoothd`
-пишет туда `Received call hangup event (AT+CHUP) from device <адрес>` и не
-редактирует адрес. Агент читает `log stream` с узким предикатом.
+The only public way to observe the press is the unified log: `bluetoothd`
+writes `Received call hangup event (AT+CHUP) from device <address>` and does
+not redact the address. The agent reads `log stream` with a narrow predicate.
 
-**Это скрейпинг системного лога.** Публичного API для этого сигнала не
-существует, а формулировка сообщения не является контрактом: Apple может
-переименовать его в любом обновлении macOS, и триггер молча перестанет
-работать. Для диагностики в меню есть пункт «Проверить сигнал кнопки» -- он
-показывает, сколько нажатий система записала за последние 10 минут.
+**This is system log scraping.** No public API exists for this signal, and the
+wording of the message is not a contract: Apple may rename it in any macOS
+update and the trigger will silently stop working. The **Check button signal**
+menu item reports how many presses the system logged in the last 10 minutes,
+which makes that failure obvious.
 
-## Требования
+## Requirements
 
-- macOS 13+ (проверено на macOS 26)
-- Apple Silicon (в `build.sh` зашит `arm64`; для Intel поменяйте `-target`)
-- Zoom с интерфейсом на английском или русском (см. `micMenuTitles` в коде)
-- Инструменты командной строки Xcode: `xcode-select --install`
+- macOS 13+ (tested on macOS 26)
+- Apple Silicon (`build.sh` hardcodes `arm64`; change `-target` for Intel)
+- Zoom with an English or Russian interface (see `micMenuTitles` in the source)
+- Xcode command line tools: `xcode-select --install`
 
-## Установка
+## Install
 
 ```sh
 git clone https://github.com/evtaranov/BoseMicToggle.git
@@ -55,105 +55,105 @@ cd BoseMicToggle
 open -a ~/Applications/BoseMicToggle.app
 ```
 
-Дальше нужно выдать **Accessibility** -- без него агент не прочитает меню Zoom:
+Then grant **Accessibility** -- without it the agent cannot read Zoom's menu:
 
-> Системные настройки → Конфиденциальность и безопасность → Универсальный доступ
+> System Settings → Privacy & Security → Accessibility
 
-Добавьте `~/Applications/BoseMicToggle.app` кнопкой `+` и включите тумблер.
-После этого перезапустите агента («Выйти» в его меню, затем `open -a` заново).
+Add `~/Applications/BoseMicToggle.app` with `+` and switch it on, then restart
+the agent (**Quit** in its menu, then `open -a` again).
 
-Проверить, что права применились:
+Verify the permission took effect:
 
 ```sh
 grep 'accessibility trusted' ~/Library/Logs/BoseMicToggle.log | tail -1
 ```
 
-### Автозапуск при входе
+### Start at login
 
 ```sh
-./install-autostart.sh            # поставить
-./install-autostart.sh --uninstall  # снять
+./install-autostart.sh              # install
+./install-autostart.sh --uninstall  # remove
 ```
 
-Скрипт генерирует LaunchAgent с путём вашего пользователя: `launchd` не
-понимает `~` и требует абсолютный путь. Агент запускается через `/usr/bin/open`,
-а не бинарником напрямую -- так приложение получает bundle-идентичность, от
-которой зависит грант Accessibility.
+The script generates a LaunchAgent containing your own path: `launchd` does not
+understand `~` and requires an absolute one. The agent is launched through
+`/usr/bin/open` rather than the binary directly, so the app keeps the bundle
+identity that its Accessibility grant is tied to.
 
-## Настройка
+## Configuration
 
-Всё меняется без пересборки, после изменения агента надо перезапустить.
+Everything below applies without rebuilding; restart the agent afterwards.
 
 ```sh
-# Громкость подтверждения (доля от системной)
+# Feedback volume, as a fraction of the system volume
 defaults write io.github.bosemictoggle soundVolume -float 0.75
 
-# Звуки: имена файлов из /System/Library/Sounds.
-# Префикс reversed: проигрывает звук задом наперёд -- так получается пара
-# одного тембра, нарастающая и спадающая.
+# Sounds: file names from /System/Library/Sounds.
+# The reversed: prefix plays a sound backwards, which is how you get a pair
+# sharing one timbre, one rising and one falling.
 defaults write io.github.bosemictoggle soundUnmuted reversed:Bottle
 defaults write io.github.bosemictoggle soundMuted Bottle
 defaults write io.github.bosemictoggle soundFailed Basso
 
-# Выгрузить меню Zoom в лог при следующем запуске -- нужно, если Zoom
-# переименует пункты и переключение перестанет находиться
+# Dump Zoom's menu to the log on next launch -- needed if Zoom renames its
+# items and the toggle stops finding them
 defaults write io.github.bosemictoggle dumpMenu -bool true
 ```
 
-Развёрнутые звуки кэшируются в `~/Library/Application Support/BoseMicToggle/`.
-Чтобы пересоздать -- удалите папку.
+Reversed sounds are cached in `~/Library/Application Support/BoseMicToggle/`.
+Delete that folder to regenerate them.
 
-## Как это устроено
+## How it works
 
-| Файл | Назначение |
+| File | Purpose |
 |---|---|
-| `main.swift` | весь агент |
-| `build.sh` | сборка `.app` в `~/Applications` |
-| `make-icon.swift` | рисует иконку кодом, собирает `AppIcon.icns` |
-| `Info.plist` | `LSUIElement` -- агент без иконки в Dock |
-| `install-autostart.sh` | LaunchAgent автозапуска |
+| `main.swift` | the whole agent |
+| `build.sh` | builds the `.app` into `~/Applications` |
+| `make-icon.swift` | draws the icon in code, builds `AppIcon.icns` |
+| `Info.plist` | `LSUIElement` -- an agent with no Dock icon |
+| `install-autostart.sh` | the login LaunchAgent |
 
-Внутри `main.swift`:
+Inside `main.swift`:
 
-- **Триггер** -- `log stream` по `bluetoothd` с предикатом на `AT+CHUP`.
-  Запускается только на время митинга: процесс `log` стоит около 7% CPU.
-  Если он падает (например, после сна), поднимается заново.
-- **Мьют** -- нажатие пункта `Meeting → Mute/Unmute audio` через Accessibility.
-  Меню не открывается и фокус на Zoom не переключается.
-- **Определение митинга** -- по наличию того же пункта меню; вне митинга
-  Zoom его не показывает. Опрос раз в 4 секунды, он же даёт состояние
-  микрофона для иконки.
+- **Trigger** -- `log stream` over `bluetoothd` with a predicate on `AT+CHUP`.
+  It runs only during a meeting, because the `log` process costs around 7% CPU.
+  If it dies (after sleep, for instance) it is restarted.
+- **Muting** -- pressing `Meeting → Mute/Unmute audio` through Accessibility.
+  No menu is opened and focus never moves to Zoom.
+- **Meeting detection** -- the presence of that same menu item; Zoom does not
+  show it outside a meeting. Polled every 4 seconds, which also yields the
+  microphone state for the icon.
 
-## Известные ограничения
+## Known limitations
 
-- **Только Zoom.** Для других приложений нужно дописать свой способ мьюта.
-- **Кнопка присылает «сбросить вызов».** В Zoom это ни на что не влияет, но
-  если параллельно идёт настоящий звонок (FaceTime, телефон через iPhone), то
-  же нажатие его повесит. Это делает macOS раньше, чем агент видит событие.
-- **Права слетают при каждой пересборке.** Подпись ad-hoc, поэтому хэш кода
-  меняется и macOS считает сборку новым приложением. Лечится только удалением
-  записи из списка Универсального доступа кнопкой `-` и добавлением заново;
-  переключение галочки на старой записи не помогает. Чтобы это прекратилось,
-  нужна стабильная подпись вместо ad-hoc.
-- **Привязка к названиям пунктов меню Zoom.** Поддержаны английский и русский
-  интерфейс; для другого языка добавьте строки в `micMenuTitles`.
+- **Zoom only.** Other applications would need their own muting path.
+- **The button sends "hang up".** That is inert in Zoom, but if a real call is
+  running in parallel (FaceTime, or a phone call relayed from an iPhone), the
+  same press will end it. macOS acts on this before the agent sees the event.
+- **Permissions reset on every rebuild.** The build is ad-hoc signed, so the
+  code hash changes and macOS treats each build as a new application. The only
+  fix is removing the entry from the Accessibility list with `-` and adding it
+  again; toggling the checkbox on the stale entry does nothing. A stable
+  signing identity instead of ad-hoc would end this.
+- **Tied to Zoom's menu item titles.** English and Russian are supported; for
+  another language add entries to `micMenuTitles`.
 
-## Диагностика
+## Troubleshooting
 
 ```sh
 tail -f ~/Library/Logs/BoseMicToggle.log
 ```
 
-Нажатия кнопки видны в системном логе независимо от агента:
+Button presses are visible in the system log independently of the agent:
 
 ```sh
 log show --last 10m --debug --predicate 'eventMessage CONTAINS "AT+CHUP"'
 ```
 
-Если тут пусто, а кнопку нажимали -- сигнал до macOS не доходит либо Apple
-переименовала сообщение. Если тут есть записи, а агент не реагирует --
-проблема на стороне агента, смотрите его лог.
+Nothing there after pressing the button means the signal is not reaching macOS,
+or Apple reworded the message. Entries there while the agent does nothing means
+the problem is on the agent's side -- check its log.
 
-## Лицензия
+## License
 
 MIT

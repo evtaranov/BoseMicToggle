@@ -1,12 +1,12 @@
-// Рисует иконку приложения и собирает AppIcon.icns.
-// Запуск: swift make-icon.swift
+// Draws the application icon and assembles AppIcon.icns.
+// Run: swift make-icon.swift
 //
-// Каждый размер рисуется вектором отдельно, а не масштабированием одной
-// большой картинки: на 16 и 32 пикселях уменьшенная версия превращается в кашу.
+// Every size is drawn as vector art separately rather than downscaled from one
+// large image: at 16 and 32 pixels a downscaled version turns to mush.
 
 import AppKit
 
-// MARK: - Рисование
+// MARK: - Drawing
 
 func drawIcon(px: Int) -> NSBitmapImageRep {
     let size = CGFloat(px)
@@ -15,14 +15,14 @@ func drawIcon(px: Int) -> NSBitmapImageRep {
         bitmapDataPlanes: nil, pixelsWide: px, pixelsHigh: px,
         bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
         colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)
-    else { fatalError("не создался битмап \(px)") }
+    else { fatalError("could not create a \(px) bitmap") }
 
     rep.size = CGSize(width: size, height: size)
 
     NSGraphicsContext.saveGraphicsState()
     NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
 
-    // Поля по канону macOS: арт не упирается в края канваса.
+    // macOS convention: the art does not run into the canvas edges.
     let inset = size * 0.085
     let plate = CGRect(x: inset, y: inset, width: size - inset * 2, height: size - inset * 2)
     let radius = plate.width * 0.225
@@ -43,9 +43,9 @@ func drawIcon(px: Int) -> NSBitmapImageRep {
     NSColor.white.setFill()
     NSColor.white.setStroke()
 
-    // Дуга наушников над микрофоном -- отсюда и берётся нажатие.
-    // Дуга обрывается раньше подушек, иначе круглый торец сливается с ними
-    // в каплю.
+    // The headband above the microphone -- where the press comes from.
+    // The arc stops short of the ear cups, otherwise its round cap merges
+    // with them into a teardrop.
     let bandRadius = W * 0.335
     let bandCenter = CGPoint(x: cx, y: cy + H * 0.04)
 
@@ -57,7 +57,7 @@ func drawIcon(px: Int) -> NSBitmapImageRep {
     NSColor(white: 1, alpha: 0.92).setStroke()
     band.stroke()
 
-    // Амбушюры на концах дуги.
+    // Ear cups at the ends of the band.
     NSColor(white: 1, alpha: 0.92).setFill()
     let padW = W * 0.135
     let padH = W * 0.20
@@ -73,14 +73,14 @@ func drawIcon(px: Int) -> NSBitmapImageRep {
     NSColor.white.setFill()
     NSColor.white.setStroke()
 
-    // Капсула микрофона.
+    // Microphone capsule.
     let capsuleW = W * 0.185
     let capsuleH = H * 0.30
     let capsule = CGRect(x: cx - capsuleW / 2, y: cy - H * 0.06,
                          width: capsuleW, height: capsuleH)
     NSBezierPath(roundedRect: capsule, xRadius: capsuleW / 2, yRadius: capsuleW / 2).fill()
 
-    // Держатель -- дуга снизу вокруг капсулы.
+    // Cradle -- an arc under the capsule.
     let cradle = NSBezierPath()
     cradle.appendArc(withCenter: CGPoint(x: cx, y: cy - H * 0.035),
                      radius: W * 0.155,
@@ -89,7 +89,7 @@ func drawIcon(px: Int) -> NSBitmapImageRep {
     cradle.lineCapStyle = .round
     cradle.stroke()
 
-    // Ножка и основание.
+    // Stem and base.
     let stemW = W * 0.055
     let stemTop = cy - H * 0.185
     let stemBottom = cy - H * 0.275
@@ -109,12 +109,12 @@ func drawIcon(px: Int) -> NSBitmapImageRep {
 
 func writePNG(_ rep: NSBitmapImageRep, to url: URL) {
     guard let data = rep.representation(using: .png, properties: [:]) else {
-        fatalError("не вышло закодировать png")
+        fatalError("could not encode png")
     }
     try! data.write(to: url)
 }
 
-// MARK: - Сборка iconset
+// MARK: - Assembling the iconset
 
 let projectDir = URL(fileURLWithPath: CommandLine.arguments.count > 1
     ? CommandLine.arguments[1]
@@ -124,7 +124,7 @@ let iconset = projectDir.appendingPathComponent("AppIcon.iconset")
 try? FileManager.default.removeItem(at: iconset)
 try! FileManager.default.createDirectory(at: iconset, withIntermediateDirectories: true)
 
-// Имена строго по требованиям iconutil.
+// Names exactly as iconutil requires.
 let variants: [(name: String, px: Int)] = [
     ("icon_16x16", 16), ("icon_16x16@2x", 32),
     ("icon_32x32", 32), ("icon_32x32@2x", 64),
@@ -138,7 +138,7 @@ for variant in variants {
              to: iconset.appendingPathComponent("\(variant.name).png"))
 }
 
-// Отдельная большая картинка для README.
+// A separate large image for the README.
 writePNG(drawIcon(px: 512), to: projectDir.appendingPathComponent("icon-preview.png"))
 
-print("нарисовано \(variants.count) размеров в \(iconset.lastPathComponent)")
+print("drew \(variants.count) sizes into \(iconset.lastPathComponent)")

@@ -1,16 +1,16 @@
 #!/bin/bash
-# Собирает BoseMicToggle.app в ~/Applications.
+# Builds BoseMicToggle.app into ~/Applications.
 #
-# Собираем .app, а не отдельный бинарник: агенту нужен Info.plist (LSUIElement)
-# и bundle-идентичность, от которой зависит грант Accessibility.
+# We build a .app rather than a bare binary: the agent needs an Info.plist
+# (LSUIElement) and the bundle identity its Accessibility grant is tied to.
 #
-# ВАЖНО после каждой пересборки: подпись здесь ad-hoc, поэтому хэш кода
-# меняется и macOS считает сборку новым приложением -- грант Accessibility
-# слетает. Восстанавливается только удалением записи из
-# Настройки -> Конфиденциальность -> Универсальный доступ кнопкой "-"
-# и добавлением заново через "+"; переключение галочки на старой записи
-# не помогает. Чтобы это прекратилось, нужна стабильная подпись
-# (самоподписанный сертификат) вместо ad-hoc.
+# IMPORTANT after every rebuild: the signature here is ad-hoc, so the code hash
+# changes and macOS treats the build as a new application -- the Accessibility
+# grant is lost. Restoring it requires removing the entry from
+# System Settings -> Privacy & Security -> Accessibility with "-" and adding it
+# again with "+"; toggling the checkbox on the stale entry does not help.
+# A stable signing identity (a self-signed certificate) instead of ad-hoc would
+# put an end to this.
 set -euo pipefail
 
 SRC_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -20,8 +20,8 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$SRC_DIR/Info.plist" "$APP/Contents/Info.plist"
 
-# Иконка рисуется кодом; в репозитории лежит готовый .icns, но если его нет --
-# собираем заново, чтобы клон без бинарников тоже собирался.
+# The icon is drawn in code; a prebuilt .icns is committed, but if it is missing
+# we regenerate it so a clone without binaries still builds.
 if [ ! -f "$SRC_DIR/AppIcon.icns" ]; then
 	swift "$SRC_DIR/make-icon.swift" "$SRC_DIR"
 	iconutil -c icns "$SRC_DIR/AppIcon.iconset" -o "$SRC_DIR/AppIcon.icns"
@@ -38,7 +38,7 @@ swiftc \
 	-o "$APP/Contents/MacOS/BoseMicToggle" \
 	"$SRC_DIR/main.swift"
 
-# Подпись обязательна: без неё macOS не выдаёт приложению Accessibility.
+# Signing is mandatory: without it macOS will not grant Accessibility.
 codesign --force --sign - "$APP"
 
-echo "собрано: $APP"
+echo "built: $APP"

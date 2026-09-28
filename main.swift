@@ -1,44 +1,46 @@
-// BoseMicToggle -- кнопка play/pause на Bluetooth-гарнитуре мьютит микрофон в Zoom.
+// BoseMicToggle -- the play/pause button on a Bluetooth headset mutes Zoom.
 //
-// Почему всё устроено именно так (проверено экспериментально 2026-09-28):
+// Why it is built this way (verified experimentally on 2026-09-28):
 //
-//  * Во время звонка гарнитура уходит в профиль HFP (16 кГц моно). В HFP
-//    многофункциональная кнопка -- это управление вызовом, а не AVRCP
-//    play/pause: наушники присылают AT-команду `AT+CHUP` по RFCOMM.
-//  * Эту команду принимает системный bluetoothd и приложениям не отдаёт:
-//    в поток CGEvent она не попадает (hs.eventtap/Karabiner её не видят),
-//    MediaRemote её тоже не получает, и HID-устройства для Bluetooth-гарнитуры
-//    macOS не создаёт (найденные Consumer-Control "Headset" принадлежат
-//    встроенному кодеку, то есть разъёму 3.5 мм).
-//  * Единственный публичный способ увидеть нажатие -- unified log: bluetoothd
-//    пишет "Received call hangup event (AT+CHUP) from device <адрес>" и не
-//    редактирует адрес. Отсюда чтение `log stream` с узким предикатом.
+//  * During a call the headset switches to the HFP profile (16 kHz mono).
+//    In HFP the multifunction button is call control, not AVRCP play/pause:
+//    the headset sends the AT command `AT+CHUP` over RFCOMM.
+//  * The system bluetoothd receives that command and never forwards it to
+//    applications: it does not reach the CGEvent stream (hs.eventtap and
+//    Karabiner cannot see it), MediaRemote does not get it either, and macOS
+//    creates no HID device for a Bluetooth headset (the Consumer-Control
+//    "Headset" devices that do exist belong to the built-in codec, i.e. the
+//    3.5 mm jack).
+//  * The only public way to observe the press is the unified log: bluetoothd
+//    logs "Received call hangup event (AT+CHUP) from device <address>" and
+//    does not redact the address. Hence reading `log stream` with a narrow
+//    predicate.
 //
-// Это скрейпинг лога, то есть Apple может переименовать сообщение в любом
-// обновлении macOS, и тогда триггер молча перестанет работать. Пункт меню
-// "Проверить сигнал кнопки" существует ровно для того, чтобы это быстро
-// диагностировать.
+// This is log scraping: Apple may reword that message in any macOS update and
+// the trigger would silently stop working. The "Check button signal" menu item
+// exists precisely to diagnose that quickly.
 
 import AVFoundation
 import AppKit
 import ApplicationServices
 import Foundation
 
-// MARK: - Настройки
+// MARK: - Configuration
 
 let zoomBundleID = "us.zoom.xos"
 let meetingPollInterval: TimeInterval = 4.0
 
-/// Одно нажатие попадает в лог 2-3 раза (разные потоки bluetoothd) с разницей
-/// в десятки миллисекунд, поэтому дубли гасим.
+/// A single press lands in the log 2-3 times (different bluetoothd threads)
+/// tens of milliseconds apart, so duplicates are suppressed.
 let debounceInterval: TimeInterval = 0.5
 
-/// Подстрока, по которой узнаём нажатие кнопки гарнитуры.
+/// The substring that identifies a headset button press.
 let buttonMarker = "AT+CHUP"
 
-/// Пункты меню Zoom для микрофона (ключи в нижнем регистре: Zoom пишет
-/// "Unmute audio" со строчной "a", и капитализация менялась между версиями).
-/// Значение true означает «микрофон сейчас выключен» -- пункт предлагает включить.
+/// Zoom's microphone menu items, keyed lowercase: Zoom writes "Unmute audio"
+/// with a lowercase "a", and the capitalization has changed between versions.
+/// A value of true means the microphone is currently muted -- the item offers
+/// to unmute. Localized Zoom titles are listed alongside the English ones.
 let micMenuTitles: [String: Bool] = [
     "mute audio": false,
     "unmute audio": true,
@@ -46,10 +48,10 @@ let micMenuTitles: [String: Bool] = [
     "включить звук": true,
 ]
 
-// MARK: - Лог
+// MARK: - Logging
 
-// Запущенный через LaunchServices агент не имеет видимого stderr, поэтому
-// пишем в файл.
+// An agent launched through LaunchServices has no visible stderr, so we write
+// to a file.
 let logURL = FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent("Library/Logs/BoseMicToggle.log")
 
@@ -67,7 +69,7 @@ func log(_ message: String) {
     }
 }
 
-// MARK: - Accessibility: чтение и нажатие меню Zoom
+// MARK: - Accessibility: reading and pressing Zoom's menu
 
 func axCopy(_ element: AXUIElement, _ attribute: String) -> CFTypeRef? {
     var value: CFTypeRef?
@@ -95,8 +97,8 @@ func zoomMenuBar() -> AXUIElement? {
     return (menuBar as! AXUIElement)
 }
 
-/// Ищет в меню-баре Zoom пункт mute/unmute. Меню при этом не открывается.
-/// nil означает, что митинга нет: вне митинга Zoom такого пункта не показывает.
+/// Finds the mute/unmute item in Zoom's menu bar without opening any menu.
+/// nil means there is no meeting: outside a meeting Zoom does not show it.
 func findZoomMicMenuItem() -> (item: AXUIElement, muted: Bool)? {
     guard let menuBar = zoomMenuBar() else { return nil }
 
@@ -116,29 +118,29 @@ func findZoomMicMenuItem() -> (item: AXUIElement, muted: Bool)? {
 
 enum MicToggle {
     case toggled(muted: Bool)
-    /// Митинга нет -- переключать нечего, это не ошибка.
+    /// No meeting -- nothing to toggle, which is not an error.
     case noMeeting
-    /// Митинг есть, но нажать пункт меню не удалось.
+    /// A meeting is running but pressing the menu item failed.
     case failed
 }
 
 func toggleZoomMic() -> MicToggle {
     guard let (item, muted) = findZoomMicMenuItem() else {
-        log("митинга нет -- переключать нечего")
+        log("no meeting -- nothing to toggle")
         return .noMeeting
     }
     guard AXUIElementPerformAction(item, kAXPressAction as CFString) == .success else {
-        log("не удалось нажать пункт меню")
+        log("failed to press the menu item")
         return .failed
     }
     return .toggled(muted: !muted)
 }
 
-/// Выгружает меню Zoom в лог. Нужно, если Zoom переименует пункты и
-/// micMenuTitles перестанет совпадать.
+/// Dumps Zoom's menu to the log. Needed when Zoom renames its items and
+/// micMenuTitles stops matching.
 func dumpZoomMenu() {
     guard let menuBar = zoomMenuBar() else {
-        log("дамп меню: Zoom не запущен или нет прав Accessibility")
+        log("menu dump: Zoom is not running, or Accessibility is not granted")
         return
     }
 
@@ -153,28 +155,28 @@ func dumpZoomMenu() {
         }
         lines.append("  \(top): \(entries.joined(separator: " | "))")
     }
-    log("дамп меню Zoom:\n" + lines.joined(separator: "\n"))
+    log("Zoom menu dump:\n" + lines.joined(separator: "\n"))
 }
 
-// MARK: - Развёрнутые системные звуки
+// MARK: - Reversed system sounds
 
-/// Префикс в имени звука: "reversed:Bottle" -- взять системный Bottle и
-/// проиграть задом наперёд. Нужно, чтобы включение и выключение звучали одним
-/// тембром и отличались только направлением: у системных звуков нарастающей
-/// пары к спадающей просто нет.
+/// A prefix in a sound name: "reversed:Bottle" means take the system Bottle
+/// sound and play it backwards. This is how mute and unmute end up sharing one
+/// timbre and differing only in direction -- the system sounds offer no
+/// rising counterpart to a falling one.
 let reversedPrefix = "reversed:"
 
 private let soundCacheDir = FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent("Library/Application Support/BoseMicToggle")
 
-/// Разворачивает системный звук и кладёт результат в кэш. Возвращает файл.
+/// Reverses a system sound and caches the result. Returns the cached file.
 func reversedSystemSound(_ name: String) -> URL? {
     let cached = soundCacheDir.appendingPathComponent("\(name)-reversed.wav")
     if FileManager.default.fileExists(atPath: cached.path) { return cached }
 
     let source = URL(fileURLWithPath: "/System/Library/Sounds/\(name).aiff")
     guard let input = try? AVAudioFile(forReading: source) else {
-        log("разворот: не открылся \(source.lastPathComponent)")
+        log("reverse: could not open \(source.lastPathComponent)")
         return nil
     }
 
@@ -185,7 +187,7 @@ func reversedSystemSound(_ name: String) -> URL? {
           (try? input.read(into: buffer)) != nil,
           let channels = buffer.floatChannelData
     else {
-        log("разворот: не прочитался \(name)")
+        log("reverse: could not read \(name)")
         return nil
     }
 
@@ -202,8 +204,8 @@ func reversedSystemSound(_ name: String) -> URL? {
         }
     }
 
-    // У системных звуков заметный тихий хвост; после разворота он оказывается
-    // в начале и даёт задержку перед звуком, поэтому срезаем.
+    // System sounds have a noticeable quiet tail; after reversing it lands at
+    // the front and delays the onset, so trim it.
     var start = 0
     let threshold: Float = 0.01
     outer: for i in 0..<frames {
@@ -238,21 +240,21 @@ func reversedSystemSound(_ name: String) -> URL? {
         let output = try AVAudioFile(forWriting: cached, settings: settings)
         try output.write(from: trimmed)
     } catch {
-        log("разворот: не записался кэш -- \(error.localizedDescription)")
+        log("reverse: could not write cache -- \(error.localizedDescription)")
         return nil
     }
 
     let seconds = Double(keep) / format.sampleRate
-    log("развернул \(name): срезано \(start) кадров, длина \(String(format: "%.2f", seconds))с")
+    log("reversed \(name): trimmed \(start) frames, length \(String(format: "%.2f", seconds))s")
     return cached
 }
 
-// MARK: - Звуковое подтверждение
+// MARK: - Audio feedback
 
-/// Системные звуки вместо своих файлов: ничего не нужно тащить с собой, и они
-/// уже подогнаны по громкости под остальную систему. Имена -- содержимое
-/// /System/Library/Sounds, плюс префикс "reversed:" для разворота.
-/// Меняются без пересборки, например:
+/// System sounds instead of bundled files: nothing to ship, and they are
+/// already balanced against the rest of the system. Names are the contents of
+/// /System/Library/Sounds, plus the "reversed:" prefix. Changeable without
+/// rebuilding, for example:
 ///   defaults write io.github.bosemictoggle soundUnmuted Ping
 ///   defaults write io.github.bosemictoggle soundMuted reversed:Purr
 ///   defaults write io.github.bosemictoggle soundVolume -float 0.5
@@ -263,10 +265,10 @@ final class Sounds {
 
     init() {
         defaults.register(defaults: [
-            // Одна пара одного тембра: вверх на включение, вниз на выключение.
+            // One timbre, two directions: rising to unmute, falling to mute.
             "soundUnmuted": reversedPrefix + "Bottle",
             "soundMuted": "Bottle",
-            "soundFailed": "Basso",     // привычный системный звук ошибки
+            "soundFailed": "Basso",     // the familiar system error sound
             "soundVolume": 0.75,
             "soundsEnabled": true,
         ])
@@ -281,7 +283,7 @@ final class Sounds {
     func playUnmuted() { play(defaults.string(forKey: "soundUnmuted")) }
     func playFailed() { play(defaults.string(forKey: "soundFailed")) }
 
-    /// Проиграть все три по очереди -- проверка без дёргания микрофона.
+    /// Plays all three in turn -- a check that does not touch the microphone.
     func preview() {
         let wasEnabled = enabled
         enabled = true
@@ -298,14 +300,14 @@ final class Sounds {
         guard enabled, let name else { return }
 
         guard let sound = cache[name] ?? load(name) else {
-            log("звук \"\(name)\" не найден")
+            log("sound \"\(name)\" not found")
             return
         }
         cache[name] = sound
 
         sound.volume = Float(defaults.double(forKey: "soundVolume"))
 
-        // Быстрые повторные нажатия иначе проглатываются.
+        // Otherwise rapid repeated presses get swallowed.
         if sound.isPlaying { sound.stop() }
         sound.play()
     }
@@ -315,18 +317,18 @@ final class Sounds {
 
         let base = String(name.dropFirst(reversedPrefix.count))
         guard let file = reversedSystemSound(base) else {
-            // Разворот не получился -- лучше обычный звук, чем тишина.
+            // Reversing failed -- a plain sound beats silence.
             return NSSound(named: base)
         }
         return NSSound(contentsOf: file, byReference: false)
     }
 }
 
-// MARK: - Чтение нажатий кнопки из unified log
+// MARK: - Reading button presses from the unified log
 
-/// Запускает `log stream` с узким предикатом и дёргает onButton на каждую
-/// AT-команду от гарнитуры. Стрим стоит около 7% CPU, поэтому живёт только
-/// пока идёт митинг.
+/// Runs `log stream` with a narrow predicate and calls onButton for every AT
+/// command from the headset. The stream costs roughly 7% CPU, so it only lives
+/// while a meeting is running.
 final class ButtonWatcher {
     private var process: Process?
     private var buffer = ""
@@ -358,11 +360,11 @@ final class ButtonWatcher {
             DispatchQueue.main.async { self?.consume(chunk) }
         }
 
-        // Если `log` умрёт (например, после сна), поднимаем заново.
+        // If `log` dies (after sleep, for instance), bring it back.
         task.terminationHandler = { [weak self] _ in
             DispatchQueue.main.async {
                 guard let self, self.process != nil else { return }
-                log("стрим лога завершился, перезапускаю")
+                log("log stream exited, restarting")
                 self.process = nil
                 self.start()
             }
@@ -371,20 +373,20 @@ final class ButtonWatcher {
         do {
             try task.run()
         } catch {
-            log("не удалось запустить log stream: \(error.localizedDescription)")
+            log("could not start log stream: \(error.localizedDescription)")
             return
         }
 
         process = task
         buffer = ""
-        log("слушаю кнопку гарнитуры")
+        log("listening for the headset button")
     }
 
     func stop() {
         guard let task = process else { return }
-        process = nil          // чтобы terminationHandler не перезапустил
+        process = nil          // so terminationHandler does not restart it
         task.terminate()
-        log("перестал слушать кнопку")
+        log("stopped listening for the button")
     }
 
     private func consume(_ chunk: String) {
@@ -394,9 +396,9 @@ final class ButtonWatcher {
             let line = String(buffer[buffer.startIndex..<newline])
             buffer = String(buffer[buffer.index(after: newline)...])
 
-            // `log stream` первой строкой печатает баннер с текстом предиката,
-            // а в нём есть и сам маркер. Настоящие записи начинаются с
-            // таймстампа, поэтому требуем цифру в начале строки.
+            // `log stream` prints a banner with the predicate text as its first
+            // line, and that banner contains the marker itself. Real entries
+            // start with a timestamp, so require a leading digit.
             guard let first = line.first, first.isNumber,
                   line.contains(buttonMarker)
             else { continue }
@@ -406,25 +408,26 @@ final class ButtonWatcher {
     }
 }
 
-// MARK: - Агент
+// MARK: - Agent
 
 final class Agent {
     private let watcher = ButtonWatcher()
     private let sounds = Sounds()
     private var lastToggle = Date.distantPast
 
-    /// Идёт ли Zoom-митинг -- кешируем для отрисовки меню.
+    /// Whether a Zoom meeting is running -- cached for the menu bar.
     private(set) var inMeeting = false
 
-    /// Выключен ли микрофон. nil, когда митинга нет и состояния просто не существует.
+    /// Whether the microphone is muted. nil when there is no meeting and the
+    /// state simply does not exist.
     private(set) var micMuted: Bool?
 
-    /// Смена состояния -- чтобы меню-бар перерисовался.
+    /// State changed -- redraw the menu bar.
     var onStateChange: (() -> Void)?
 
     private let enabledKey = "enabled"
 
-    /// Выключенный агент не слушает кнопку.
+    /// A disabled agent does not listen for the button.
     var enabled: Bool {
         didSet {
             UserDefaults.standard.set(enabled, forKey: enabledKey)
@@ -433,7 +436,7 @@ final class Agent {
         }
     }
 
-    /// Проброшено для меню-бара.
+    /// Exposed for the menu bar.
     var soundsEnabled: Bool {
         get { sounds.enabled }
         set { sounds.enabled = newValue }
@@ -461,11 +464,11 @@ final class Agent {
         guard now.timeIntervalSince(lastToggle) > debounceInterval else { return }
         lastToggle = now
 
-        log("нажатие кнопки: \(line)")
+        log("button press: \(line)")
         toggleMic()
     }
 
-    /// Ctrl+Alt+Cmd+M -- ручной триггер, удобно для проверки без наушников.
+    /// Ctrl+Alt+Cmd+M -- a manual trigger, handy for testing without a headset.
     private func installHotkey() {
         NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
             let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
@@ -479,10 +482,10 @@ final class Agent {
     func toggleMic() {
         switch toggleZoomMic() {
         case .toggled(let nowMuted):
-            log(nowMuted ? "микрофон выключен" : "микрофон включён")
+            log(nowMuted ? "microphone muted" : "microphone unmuted")
             nowMuted ? sounds.playMuted() : sounds.playUnmuted()
 
-            // Не ждём следующего опроса -- иконка должна меняться сразу.
+            // Do not wait for the next poll -- the icon should change at once.
             micMuted = nowMuted
             onStateChange?()
 
@@ -494,9 +497,9 @@ final class Agent {
         }
     }
 
-    /// Стрим лога дорогой, поэтому держим его только во время митинга.
+    /// The log stream is expensive, so keep it only while a meeting runs.
     private func sync() {
-        // Один обход меню даёт и факт митинга, и состояние микрофона.
+        // One menu walk yields both the meeting state and the mic state.
         if enabled, let found = findZoomMicMenuItem() {
             inMeeting = true
             micMuted = found.muted
@@ -515,7 +518,7 @@ final class Agent {
     }
 }
 
-// MARK: - Иконка в меню-баре
+// MARK: - Menu bar icon
 
 final class StatusBar: NSObject {
     private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -534,21 +537,21 @@ final class StatusBar: NSObject {
         let symbol: String
         let hint: String
 
-        // Залитый значок -- идёт митинг и состояние настоящее.
-        // Контурный -- митинга нет, показывать нечего.
+        // A filled glyph means a meeting is running and the state is real.
+        // An outlined one means there is no meeting and nothing to show.
         switch (agent.enabled, agent.micMuted) {
         case (false, _):
             symbol = "mic.slash"
-            hint = "BoseMicToggle: выключен"
+            hint = "BoseMicToggle: disabled"
         case (true, .some(true)):
             symbol = "mic.slash.fill"
-            hint = "Микрофон выключен"
+            hint = "Microphone muted"
         case (true, .some(false)):
             symbol = "mic.fill"
-            hint = "Микрофон включён"
+            hint = "Microphone live"
         case (true, .none):
             symbol = "mic"
-            hint = "BoseMicToggle: ждёт начала митинга"
+            hint = "BoseMicToggle: waiting for a meeting"
         }
 
         item.button?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: hint)
@@ -563,25 +566,24 @@ final class StatusBar: NSObject {
 
         let status: String
         switch (agent.enabled, agent.micMuted) {
-        case (false, _):            status = "Выключен"
-        case (true, .some(true)):   status = "Микрофон выключен"
-        case (true, .some(false)):  status = "Микрофон включён"
-        case (true, .none):         status = "Ждёт начала митинга"
+        case (false, _):            status = "Disabled"
+        case (true, .some(true)):   status = "Microphone muted"
+        case (true, .some(false)):  status = "Microphone live"
+        case (true, .none):         status = "Waiting for a meeting"
         }
         menu.addItem(withTitle: status, action: nil, keyEquivalent: "")
         menu.addItem(.separator())
 
-        add(menu, "Включён", checked: agent.enabled, #selector(toggleEnabled))
-        add(menu, "Звуковое подтверждение", checked: agent.soundsEnabled,
-            #selector(toggleSounds))
+        add(menu, "Enabled", checked: agent.enabled, #selector(toggleEnabled))
+        add(menu, "Audio feedback", checked: agent.soundsEnabled, #selector(toggleSounds))
 
         menu.addItem(.separator())
-        add(menu, "Прослушать звуки", checked: nil, #selector(previewSounds))
-        add(menu, "Переключить микрофон сейчас", checked: nil, #selector(toggleMicNow))
-        add(menu, "Проверить сигнал кнопки", checked: nil, #selector(checkButtonSignal))
-        add(menu, "Записать меню Zoom в лог", checked: nil, #selector(dumpMenu))
-        add(menu, "Открыть лог", checked: nil, #selector(openLog))
-        add(menu, "Выйти", checked: nil, #selector(quit))
+        add(menu, "Preview sounds", checked: nil, #selector(previewSounds))
+        add(menu, "Toggle microphone now", checked: nil, #selector(toggleMicNow))
+        add(menu, "Check button signal", checked: nil, #selector(checkButtonSignal))
+        add(menu, "Dump Zoom menu to log", checked: nil, #selector(dumpMenu))
+        add(menu, "Open log", checked: nil, #selector(openLog))
+        add(menu, "Quit", checked: nil, #selector(quit))
     }
 
     private func add(_ menu: NSMenu, _ title: String, checked: Bool?, _ action: Selector) {
@@ -599,8 +601,9 @@ final class StatusBar: NSObject {
     @objc private func openLog() { NSWorkspace.shared.open(logURL) }
     @objc private func quit() { NSApp.terminate(nil) }
 
-    /// Показывает, сколько нажатий кнопки система записала за последние 10 минут.
-    /// Если тут ноль, а кнопку жали -- Apple переименовала сообщение в логе.
+    /// Reports how many button presses the system logged in the last 10
+    /// minutes. Zero here after pressing the button means Apple reworded the
+    /// log message.
     @objc private func checkButtonSignal() {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/log")
@@ -613,7 +616,7 @@ final class StatusBar: NSObject {
         task.standardError = Pipe()
 
         guard (try? task.run()) != nil else {
-            log("проверка сигнала: не удалось запустить log show")
+            log("signal check: could not run log show")
             return
         }
         let data = out.fileHandleForReading.readDataToEndOfFile()
@@ -623,21 +626,21 @@ final class StatusBar: NSObject {
             .split(separator: "\n")
             .filter { $0.contains(buttonMarker) }
 
-        log("проверка сигнала: нажатий за 10 минут -- \(hits.count)")
-        if let last = hits.last { log("последнее: \(last)") }
+        log("signal check: \(hits.count) presses in the last 10 minutes")
+        if let last = hits.last { log("most recent: \(last)") }
     }
 }
 
-// MARK: - Точка входа
+// MARK: - Entry point
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let agent = Agent()
     private var statusBar: StatusBar?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        log("агент запущен, bundle=\(Bundle.main.bundleIdentifier ?? "nil")")
+        log("agent started, bundle=\(Bundle.main.bundleIdentifier ?? "nil")")
 
-        // Без Accessibility агент не прочитает меню Zoom. Просим права один раз.
+        // Without Accessibility the agent cannot read Zoom's menu. Ask once.
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true]
         log("accessibility trusted = \(AXIsProcessTrustedWithOptions(options as CFDictionary))")
 
@@ -645,7 +648,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         agent.start()
 
         // `defaults write io.github.bosemictoggle dumpMenu -bool true`
-        // -- выгрузить меню Zoom при следующем запуске.
+        // -- dump Zoom's menu on the next launch.
         if UserDefaults.standard.bool(forKey: "dumpMenu") {
             dumpZoomMenu()
         }
